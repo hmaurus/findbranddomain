@@ -35,7 +35,13 @@ findbranddomain/
 ## Arquitetura
 
 ```
-Frontend (Next.js) → WebSocket/REST → Backend (FastAPI) → DNS → Cache → RDAP
+Frontend (Next.js) → WebSocket/REST → Backend (FastAPI)
+                                        ↓
+                              DNS pré-filtro (~30ms)
+                                        ↓
+                              Cache Redis (TTL 1h)
+                                        ↓
+                              RDAP confirmação (~500ms)
 ```
 
 ### Pipeline de verificação
@@ -100,3 +106,10 @@ python3 check_domains.py -p "ai*.com" -tf termos-ai.txt --json 2>/dev/null
 - Domínios com hífen: mais disponíveis, menos brandáveis
 - Domínios curtos (5-8 chars) são mais valiosos
 - Verisign direto é ~2x mais rápido que bootstrap rdap.org
+
+## Convenções
+
+- Commits: Conventional Commits (`tipo(escopo): descrição`)
+- Idioma do código: inglês
+- Idioma da documentação: português (BR)
+- Sem dependências externas desnecessárias
