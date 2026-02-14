@@ -1,50 +1,102 @@
 # FindBrandDomain — Instruções para o Agente
 
-Micro SaaS de busca de domínios disponíveis com UX limpa e minimalista.
+Micro SaaS de busca de domínios disponíveis com UX minimalista. O usuário digita um nome, vê disponibilidade em tempo real nos TLDs que importam, recebe sugestões de variações e registra com um clique (link afiliado).
 
-## Documentação
+## Documentação do Projeto
 
 - `docs/PRD.md` — Product Requirements Document do MVP
 - `docs/projeto/pesquisa1.md` — Pesquisa de viabilidade (benchmark instantdomainsearch.com)
 
+## Estrutura do Projeto
+
+```
+findbranddomain/
+├── check_domains.py          # Motor RDAP (reaproveitado como módulo no backend)
+├── gen_domains.py             # Gerador de candidatos (base para motor de sugestões)
+├── termos-ai.txt              # Lista de ~160 termos para combinação
+├── CLAUDE.md                  # Este arquivo
+└── docs/
+    ├── PRD.md                 # Especificação do MVP
+    └── projeto/
+        └── pesquisa1.md       # Pesquisa de viabilidade
+```
+
 ## Stack do MVP
 
-- **Frontend**: Next.js 15 + React 19, Tailwind CSS, next-intl (i18n: en + pt-BR)
-- **Backend**: FastAPI (Python), WebSocket + REST
-- **Cache**: Redis (TTL 1h)
-- **Deploy**: VPS (Hetzner/DigitalOcean)
-
-## Código Legado Reaproveitável
-
-Estes scripts CLI são a base para os módulos do backend:
-
-- `check_domains.py` — Lógica RDAP core (`check_domain()`, `get_rdap_url()`, retry com backoff). Será refatorado em módulo importável para o backend FastAPI.
-- `gen_domains.py` — Gerador de variações de nomes. Base para o motor de sugestões.
-- `termos-ai.txt` — Lista de ~160 termos para sugestões.
+| Camada | Tecnologia |
+|--------|------------|
+| Frontend | Next.js 15 + React 19 + Tailwind CSS |
+| i18n | next-intl (en + pt-BR) |
+| Backend | FastAPI (Python) |
+| Cache | Redis (TTL 1h) |
+| Verificação | DNS pré-filtro → RDAP confirmação |
+| Deploy | VPS (Hetzner/DigitalOcean) |
 
 ## Arquitetura
 
 ```
-Frontend (Next.js) → WebSocket/REST → Backend (FastAPI)
-                                        ↓
-                              DNS pré-filtro (~30ms)
-                                        ↓
-                              Cache Redis (TTL 1h)
-                                        ↓
-                              RDAP confirmação (~500ms)
+Frontend (Next.js) → WebSocket/REST → Backend (FastAPI) → DNS → Cache → RDAP
 ```
 
-## Limites Técnicos RDAP
+### Pipeline de verificação
 
-- `.com`/`.net` via Verisign direto: ~500ms, confiabilidade alta
-- `.org`, `.io`, `.dev`, `.app`, `.xyz` via rdap.org bootstrap: ~800-1200ms, confiabilidade boa
-- `.co` via bootstrap: **falsos positivos** — não confiar sem validação extra
+1. Normalizar input (lowercase, caracteres válidos)
+2. Gerar domínios para 8-10 TLDs curados
+3. Checar cache Redis
+4. DNS pré-filtro (~30ms) — se tem DNS → registrado
+5. RDAP confirmação (~500ms) — só para domínios sem DNS
+6. Cache resultado com TTL 1h
+7. Gerar sugestões (prefixos, sufixos, plurais)
+
+## Código Reaproveitável
+
+### check_domains.py
+
+Funções que viram módulo no backend FastAPI:
+
+- `check_domain(domain, timeout)` → verifica um domínio via RDAP, retorna `{domain, available, status, time_ms}`
+- `get_rdap_url(domain)` → resolve endpoint RDAP por TLD (Verisign direto para .com/.net)
+- Retry com exponential backoff para HTTP 429
+
+### gen_domains.py
+
+Lógica de combinação reaproveitável para o motor de sugestões:
+
+- Prefixos: get-, my-, try-, use-, go-
+- Sufixos: -app, -hub, -hq, -dev
+- Plurais, hífens, inversões
+
+## Consulta de Domínios via CLI
+
+Os scripts CLI continuam funcionais para testes e validação durante o desenvolvimento:
+
+```bash
+# Busca padrão
+python3 check_domains.py -p "ai*.com" -t hub flow kit -n 10
+
+# Com variantes
+python3 check_domains.py -p "ai*.com" -tf termos-ai.txt --variants -n 50
+
+# Domínios específicos
+python3 check_domains.py -d exemplo.com teste.com outro.com
+
+# JSON para pós-processamento
+python3 check_domains.py -p "ai*.com" -tf termos-ai.txt --json 2>/dev/null
+```
+
+## Limites Técnicos
+
+- RDAP: ~500ms/domínio via Verisign (.com/.net), ~800-1200ms via rdap.org (outros TLDs)
+- DNS pré-filtro: ~30ms, cobre ~90% dos casos
 - Rate limit: 15-20 workers simultâneos funciona bem
-- DNS como pré-filtro resolve ~90% dos casos em ~30ms
+- Retry automático em HTTP 429 com backoff exponencial
+- Falsos positivos possíveis em .co via rdap.org (confirmar no registrador)
+- TLDs confiáveis: .com, .net (Verisign direto). Boa confiabilidade: .org, .io, .dev, .app, .xyz
 
-## Convenções
+## Lições Aprendidas
 
-- Commits: Conventional Commits (`tipo(escopo): descrição`)
-- Idioma do código: inglês
-- Idioma da documentação: português (BR)
-- Sem dependências externas desnecessárias
+- Prefixo `ai` extremamente saturado; `ais` tem mais disponibilidade
+- Plurais importam: guide ≠ guides — sempre testar ambos
+- Domínios com hífen: mais disponíveis, menos brandáveis
+- Domínios curtos (5-8 chars) são mais valiosos
+- Verisign direto é ~2x mais rápido que bootstrap rdap.org
